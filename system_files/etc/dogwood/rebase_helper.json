@@ -1,0 +1,8 @@
+{
+  "image-base-name": "dogwood",
+  "available-tags": [
+    "desktop",
+    "toolbox"
+  ],
+  "image-date-separator": "-"
+}

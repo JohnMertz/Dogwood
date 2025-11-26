@@ -1,6 +1,10 @@
-# Allow build scripts to be referenced without being copied into the final image
-FROM scratch AS ctx
-COPY build_files /
+# Allow build files to be referenced without being copied into the final image
+FROM scratch AS context
+COPY system_files /system_files
+COPY build_files /build_files
+
+# Kernel + Modules image
+FROM ghcr.io/ublue-os/akmods:coreos-stable-43 AS akmods
 
 ## Base Image
 FROM ghcr.io/ublue-os/base-main:latest
@@ -9,11 +13,12 @@ FROM ghcr.io/ublue-os/base-main:latest
 RUN rm /opt && mkdir /opt
 
 ## Build image
-RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
-    --mount=type=cache,dst=/var/cache \
-    --mount=type=cache,dst=/var/log \
-    --mount=type=tmpfs,dst=/tmp \
-    /ctx/build.sh
-    
+RUN --mount=type=cache,dst=/var/cache/libdnf5 \
+  --mount=type=cache,dst=/var/cache/rpm-ostree \
+  --mount=type=bind,from=context,source=/,target=/run/context \
+  --mount=type=bind,from=akmods,src=/,dst=/tmp/akmods/ \
+  --mount=type=secret,id=GITHUB_TOKEN \
+  /run/context/build_files/build.sh
+
 ## Verify final image and contents are correct.
 RUN bootc container lint
