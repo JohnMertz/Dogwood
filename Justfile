@@ -1,6 +1,7 @@
-export image_name := env("IMAGE_NAME", "dogwood") # output image name, usually same as repo name, change as needed
+export default_variant := env("DEFAULT_VARIANT", "desktop")
 export default_tag := env("DEFAULT_TAG", "latest")
 export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder:latest")
+export fedora_version := env("FEDORA_VERSION", "43")
 
 alias build-vm := build-qcow2
 alias rebuild-vm := rebuild-qcow2
@@ -71,13 +72,13 @@ sudoif command *args:
 # This Justfile recipe builds a container image using Podman.
 #
 # Arguments:
-#   $target_image - The tag you want to apply to the image (default: $image_name).
+#   $variant - The variant of the image (default $default_variant).
 #   $tag - The tag for the image (default: $default_tag).
 #
 # The script constructs the version string using the tag and the current date.
 # If the git working directory is clean, it also includes the short SHA of the current HEAD.
 #
-# just build $target_image $tag
+# just build $variant $tag
 #
 # Example usage:
 #   just build aurora lts
@@ -86,10 +87,13 @@ sudoif command *args:
 #
 
 # Build the image using the specified parameters
-build $target_image=image_name $tag=default_tag:
+build $variant=default_variant $tag=default_tag:
     #!/usr/bin/env bash
 
     BUILD_ARGS=()
+    BUILD_ARGS+=("--build-arg" "VARIANT=$variant")
+    BUILD_ARGS+=("--build-arg" "TAG=$tag")
+    BUILD_ARGS+=("--build-arg" "MAJOR_VERSION=$fedora_version")
     if [[ -z "$(git status -s)" ]]; then
         BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
     fi
@@ -97,7 +101,7 @@ build $target_image=image_name $tag=default_tag:
     podman build \
         "${BUILD_ARGS[@]}" \
         --pull=newer \
-        --tag "${target_image}:${tag}" \
+        --tag "dogwood-${variant}:${tag}" \
         .
 
 # Command: _rootful_load_image
@@ -105,7 +109,6 @@ build $target_image=image_name $tag=default_tag:
 #              If the image is found, it loads it into rootful podman. If the image is not found, it pulls it from the repository.
 #
 # Parameters:
-#   $target_image - The name of the target image to be loaded or pulled.
 #   $tag - The tag of the target image to be loaded or pulled. Default is 'default_tag'.
 #
 # Example usage:
@@ -117,7 +120,7 @@ build $target_image=image_name $tag=default_tag:
 # 3. If the image is found, load it into rootful podman using podman scp.
 # 4. If the image is not found, pull it from the remote repository into reootful podman.
 
-_rootful_load_image $target_image=image_name $tag=default_tag:
+_rootful_load_image $variant=default_variant $tag=default_tag:
     #!/usr/bin/bash
     set -eoux pipefail
 
@@ -129,36 +132,36 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
 
     # Try to resolve the image tag using podman inspect
     set +e
-    resolved_tag=$(podman inspect -t image "${target_image}:${tag}" | jq -r '.[].RepoTags.[0]')
+    resolved_tag=$(podman inspect -t image "dogwood-${variant}:${tag}" | jq -r '.[].RepoTags.[0]')
     return_code=$?
     set -e
 
-    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+    USER_IMG_ID=$(podman images --filter reference="dogwood-${variant}:${tag}" --format "'{{ '{{.ID}}' }}'")
 
     if [[ $return_code -eq 0 ]]; then
         # If the image is found, load it into rootful podman
-        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+        ID=$(just sudoif podman images --filter reference="dogwood-${variant}:${tag}" --format "'{{ '{{.ID}}' }}'")
         if [[ "$ID" != "$USER_IMG_ID" ]]; then
             # If the image ID is not found or different from user, copy the image from user podman to root podman
             COPYTMP=$(mktemp -p "${PWD}" -d -t _build_podman_scp.XXXXXXXXXX)
-            just sudoif TMPDIR=${COPYTMP} podman image scp ${UID}@localhost::"${target_image}:${tag}" root@localhost::"${target_image}:${tag}"
+            just sudoif TMPDIR=${COPYTMP} podman image scp ${UID}@localhost::"dogwood-${variant}:${tag}" root@localhost::"dogwood-${variant}:${tag}"
             rm -rf "${COPYTMP}"
         fi
     else
         # If the image is not found, pull it from the repository
-        just sudoif podman pull "${target_image}:${tag}"
+        just sudoif podman pull "dogwood-${variant}:${tag}"
     fi
 
 # Build a bootc bootable image using Bootc Image Builder (BIB)
 # Converts a container image to a bootable image
 # Parameters:
-#   target_image: The name of the image to build (ex. localhost/fedora)
+#   variant: The variant of the image to build (ex. desktop, toolbox)
 #   tag: The tag of the image to build (ex. latest)
 #   type: The type of image to build (ex. qcow2, raw, iso)
 #   config: The configuration file to use for the build (default: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
-_build-bib $target_image $tag $type $config: (_rootful_load_image target_image tag)
+_build-bib $variant $tag $type $config: (_rootful_load_image variant tag)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -180,7 +183,7 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
       -v /var/lib/containers/storage:/var/lib/containers/storage \
       "${bib_image}" \
       ${args} \
-      "${target_image}:${tag}"
+      "dogwood-${variant}:${tag}"
 
     mkdir -p output
     sudo mv -f $BUILDTMP/* output/
@@ -189,37 +192,37 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
 
 # Podman builds the image from the Containerfile and creates a bootable image
 # Parameters:
-#   target_image: The name of the image to build (ex. localhost/fedora)
+#   variant: The variant of the image to build (ex. desktop, toolbox)
 #   tag: The tag of the image to build (ex. latest)
 #   type: The type of image to build (ex. qcow2, raw, iso)
 #   config: The configuration file to use for the build (deafult: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
-_rebuild-bib $target_image $tag $type $config: (build target_image tag) && (_build-bib target_image tag type config)
+_rebuild-bib $variant $tag $type $config: (build variant tag) && (_build-bib variant tag type config)
 
 # Build a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]
-build-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "qcow2" "disk_config/disk.toml")
+build-qcow2 $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_build-bib variant tag "qcow2" "disk_config/disk.toml")
 
 # Build a RAW virtual machine image
 [group('Build Virtal Machine Image')]
-build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "raw" "disk_config/disk.toml")
+build-raw $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_build-bib variant tag "raw" "disk_config/disk.toml")
 
 # Build an ISO virtual machine image
 [group('Build Virtal Machine Image')]
-build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso.toml")
+build-iso $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_build-bib variant tag "iso" "disk_config/iso.toml")
 
 # Rebuild a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "qcow2" "disk_config/disk.toml")
+rebuild-qcow2 $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_rebuild-bib variant tag "qcow2" "disk_config/disk.toml")
 
 # Rebuild a RAW virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "raw" "disk_config/disk.toml")
+rebuild-raw $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_rebuild-bib variant tag "raw" "disk_config/disk.toml")
 
 # Rebuild an ISO virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "iso" "disk_config/iso.toml")
+rebuild-iso $variant=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_rebuild-bib variant tag "iso" "disk_config/iso.toml")
 
 # Run a virtual machine with the specified image type and configuration
 _run-vm $target_image $tag $type $config:
@@ -234,7 +237,7 @@ _run-vm $target_image $tag $type $config:
 
     # Build the image if it does not exist
     if [[ ! -f "${image_file}" ]]; then
-        just "build-${type}" "$target_image" "$tag"
+        just "build-${type}" "${target_image}" "$tag"
     fi
 
     # Determine an available port to use
@@ -265,15 +268,15 @@ _run-vm $target_image $tag $type $config:
 
 # Run a virtual machine from a QCOW2 image
 [group('Run Virtal Machine')]
-run-vm-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "qcow2" "disk_config/disk.toml")
+run-vm-qcow2 $target_image=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_run-vm target_image tag "qcow2" "disk_config/disk.toml")
 
 # Run a virtual machine from a RAW image
 [group('Run Virtal Machine')]
-run-vm-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "raw" "disk_config/disk.toml")
+run-vm-raw $target_image=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_run-vm target_image tag "raw" "disk_config/disk.toml")
 
 # Run a virtual machine from an ISO
 [group('Run Virtal Machine')]
-run-vm-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "iso" "disk_config/iso.toml")
+run-vm-iso $target_image=("localhost/dogwood-" + default_variant) $tag=default_tag: && (_run-vm target_image tag "iso" "disk_config/iso.toml")
 
 # Run a virtual machine using systemd-vmspawn
 [group('Run Virtal Machine')]

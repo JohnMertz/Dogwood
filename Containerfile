@@ -12,6 +12,13 @@ FROM ghcr.io/ublue-os/base-main:latest
 ## Make /opt immutable 
 RUN rm /opt && mkdir /opt
 
+## Required ENV variables
+ARG MAJOR_VERSION="${MAJOR_VERSION:-43}"
+ARG VARIANT="${VARIANT:-desktop}"
+ARG TAG="${TAG:-latest}"
+ARG VERSION="${VERSION:-00.00000000}"
+ARG SHA_HEAD_SHORT="${SHA_HEAD_SHORT:-deadbeef}"
+
 ## Build image
 RUN --mount=type=cache,dst=/var/cache/libdnf5 \
   --mount=type=cache,dst=/var/cache/rpm-ostree \
